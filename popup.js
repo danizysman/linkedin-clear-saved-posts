@@ -7,9 +7,10 @@ const STORAGE_KEYS = {
 
 const DEFAULT_SETTINGS = {
   maxPosts: 25,
-  minDelay: 2.5,
-  maxDelay: 4.5,
-  dryRun: false
+  minDelay: 0.8,
+  maxDelay: 1.5,
+  dryRun: false,
+  settingsVersion: 2
 };
 
 const elements = {
@@ -155,7 +156,17 @@ async function refreshCounts() {
 
 async function loadSettings() {
   const data = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
-  const settings = { ...DEFAULT_SETTINGS, ...(data[STORAGE_KEYS.SETTINGS] || {}) };
+  const stored = data[STORAGE_KEYS.SETTINGS] || {};
+  const settings = { ...DEFAULT_SETTINGS, ...stored };
+
+  if ((stored.settingsVersion ?? 1) < DEFAULT_SETTINGS.settingsVersion) {
+    if (stored.minDelay === 2.5 && stored.maxDelay === 4.5) {
+      settings.minDelay = DEFAULT_SETTINGS.minDelay;
+      settings.maxDelay = DEFAULT_SETTINGS.maxDelay;
+    }
+    settings.settingsVersion = DEFAULT_SETTINGS.settingsVersion;
+    await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings });
+  }
 
   elements.maxPosts.value = String(settings.maxPosts);
   elements.minDelay.value = String(settings.minDelay);
@@ -168,14 +179,15 @@ function readSettingsFromUI() {
   let minDelay = parseFloat(elements.minDelay.value);
   let maxDelay = parseFloat(elements.maxDelay.value);
 
-  if (Number.isNaN(minDelay) || minDelay < 0.5) minDelay = DEFAULT_SETTINGS.minDelay;
+  if (Number.isNaN(minDelay) || minDelay < 0.2) minDelay = DEFAULT_SETTINGS.minDelay;
   if (Number.isNaN(maxDelay) || maxDelay < minDelay) maxDelay = Math.max(minDelay, DEFAULT_SETTINGS.maxDelay);
 
   const settings = {
     maxPosts,
     minDelay,
     maxDelay,
-    dryRun: elements.dryRun.checked
+    dryRun: elements.dryRun.checked,
+    settingsVersion: DEFAULT_SETTINGS.settingsVersion
   };
 
   elements.maxPosts.value = String(settings.maxPosts);
@@ -379,11 +391,12 @@ async function handleConfirmClear() {
   await chrome.storage.local.set({
     [STORAGE_KEYS.UNSAVED_URNS]: [],
     [STORAGE_KEYS.TARGET_URNS]: [],
-    [STORAGE_KEYS.EXPORTED_POSTS]: []
+    [STORAGE_KEYS.EXPORTED_POSTS]: [],
+    [STORAGE_KEYS.SETTINGS]: { ...DEFAULT_SETTINGS }
   });
   elements.jsonFiles.value = '';
   elements.clearWarning.hidden = true;
-  await refreshCounts();
+  await Promise.all([loadSettings(), refreshCounts()]);
   updateProgressUI(
     { scanned: 0, matched: 0, unsaved: 0, skipped: 0, exported: 0 },
     'idle',

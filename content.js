@@ -485,8 +485,8 @@
     }
 
     const maxPosts = Math.max(1, Number(config?.maxPosts) || 25);
-    const minDelayMs = Number(config?.minDelayMs) || 2500;
-    const maxDelayMs = Number(config?.maxDelayMs) || 4500;
+    const minDelayMs = Number(config?.minDelayMs) || 800;
+    const maxDelayMs = Number(config?.maxDelayMs) || 1500;
     const dryRun = Boolean(config?.dryRun);
 
     state.mode = 'unsave';

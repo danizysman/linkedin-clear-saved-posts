@@ -22,7 +22,7 @@ A zero-dependency Manifest V3 Chrome extension to **export** your LinkedIn saved
 4. **Or Load JSON**: Select one or more `.json` files containing `post_urn` entries.
 5. **Unsave**:
    - (Recommended) Check **Dry Run (highlight matches only)** and click **Start Unsaving** to verify matched cards are outlined in green.
-   - Uncheck **Dry Run**, adjust **Max posts per run** (default `25`) and **Delay range** (default `2.5`–`4.5`s), and click **Start Unsaving**.
+   - Uncheck **Dry Run**, adjust **Max posts per run** (default `25`) and **Delay range** (default `0.8`–`1.5`s), and click **Start Unsaving**.
 6. **Clear History**: Prompts for confirmation and clears all exported posts, target URNs, and unsaved history from `chrome.storage.local`.
 
 ## Inspecting Logs in DevTools
