@@ -7,8 +7,8 @@
 
   const URN_REGEX = /urn:li:(?:activity|ugcPost):\d+/;
   const UNSAVE_LABELS = ['unsave', 'dejar de guardar'];
-  const MAX_EMPTY_SCROLL_ATTEMPTS = 3;
-  const SCROLL_WAIT_MS = 1600;
+  const MAX_EMPTY_SCROLL_ATTEMPTS = 5;
+  const SCROLL_WAIT_MS = 3500;
   const MENU_TIMEOUT_MS = 4000;
 
   const state = {
@@ -395,6 +395,66 @@
     card.style.borderRadius = '6px';
   }
 
+  function findShowMoreButton() {
+    const specificBtn = document.querySelector('button.scaffold-finite-scroll__load-button');
+    if (specificBtn && isElementVisible(specificBtn) && !specificBtn.disabled) {
+      return specificBtn;
+    }
+
+    const buttons = document.querySelectorAll('main button');
+    for (const btn of buttons) {
+      if (!isElementVisible(btn) || btn.disabled) continue;
+      const text = (btn.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (/^(?:show more results|show more|load more|mostrar más resultados|ver más)$/.test(text)) {
+        return btn;
+      }
+    }
+
+    return null;
+  }
+
+  function isFeedLoading() {
+    const spinner = document.querySelector(
+      'main .artdeco-loader, main .scaffold-finite-scroll__spinner, main [role="progressbar"]'
+    );
+    return isElementVisible(spinner);
+  }
+
+  async function loadMoreSavedPosts(processedCards, attempt = 1) {
+    const showMoreBtn = findShowMoreButton();
+    if (showMoreBtn) {
+      showMoreBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await sleepInterruptible(200);
+      if (state.shouldStop) return false;
+      showMoreBtn.click();
+      log('Clicked "Show more results" button.');
+    } else {
+      if (attempt >= 2) {
+        window.scrollBy({ top: -300, behavior: 'instant' });
+        await sleepInterruptible(150);
+      }
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+    }
+
+    const step = 250;
+    let elapsed = 0;
+    const maxWait = isFeedLoading() ? SCROLL_WAIT_MS + 2000 : SCROLL_WAIT_MS;
+
+    while (elapsed < maxWait && !state.shouldStop) {
+      await sleepInterruptible(step);
+      elapsed += step;
+
+      const hasNew = findSavedPostCards().some((card) => !processedCards.has(card));
+      if (hasNew) return true;
+
+      if (elapsed >= SCROLL_WAIT_MS && !isFeedLoading()) {
+        break;
+      }
+    }
+
+    return findSavedPostCards().some((card) => !processedCards.has(card));
+  }
+
   async function runExportAutomation(config) {
     if (state.status === 'running') {
       log('Automation is already running.');
@@ -429,10 +489,9 @@
 
         emitProgress(
           'running',
-          `Scrolling for more posts (${exportedPosts.length} exported, attempt ${emptyScrollAttempts}/${MAX_EMPTY_SCROLL_ATTEMPTS})...`
+          `Loading more posts (${exportedPosts.length} exported, attempt ${emptyScrollAttempts}/${MAX_EMPTY_SCROLL_ATTEMPTS})...`
         );
-        window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: 'smooth' });
-        await sleepInterruptible(SCROLL_WAIT_MS);
+        await loadMoreSavedPosts(processedCards, emptyScrollAttempts);
         continue;
       }
 
@@ -467,8 +526,7 @@
       await chrome.storage.local.set({ [STORAGE_KEYS.EXPORTED_POSTS]: exportedPosts });
       if (state.shouldStop) break;
 
-      window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: 'smooth' });
-      await sleepInterruptible(SCROLL_WAIT_MS);
+      await loadMoreSavedPosts(processedCards, 1);
     }
 
     if (state.shouldStop) {
@@ -528,16 +586,15 @@
         emptyScrollAttempts += 1;
         if (emptyScrollAttempts > MAX_EMPTY_SCROLL_ATTEMPTS) {
           emitProgress('completed', 'Finished: no more saved posts loaded.');
-          log('Stopping: no new cards loaded after 3 scroll attempts.');
+          log(`Stopping: no new cards loaded after ${MAX_EMPTY_SCROLL_ATTEMPTS} attempts.`);
           break;
         }
 
         emitProgress(
           'running',
-          `Scrolling for more posts (attempt ${emptyScrollAttempts}/${MAX_EMPTY_SCROLL_ATTEMPTS})...`
+          `Loading more posts (attempt ${emptyScrollAttempts}/${MAX_EMPTY_SCROLL_ATTEMPTS})...`
         );
-        window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: 'smooth' });
-        await sleepInterruptible(SCROLL_WAIT_MS);
+        await loadMoreSavedPosts(processedCards, emptyScrollAttempts);
         continue;
       }
 
@@ -618,8 +675,7 @@
 
       if (state.shouldStop) break;
 
-      window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: 'smooth' });
-      await sleepInterruptible(SCROLL_WAIT_MS);
+      await loadMoreSavedPosts(processedCards, 1);
     }
 
     if (state.shouldStop) {

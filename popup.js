@@ -2,7 +2,8 @@ const STORAGE_KEYS = {
   TARGET_URNS: 'targetUrns',
   UNSAVED_URNS: 'unsavedUrns',
   EXPORTED_POSTS: 'exportedPosts',
-  SETTINGS: 'settings'
+  SETTINGS: 'settings',
+  ACTIVE_TAB: 'activeTab'
 };
 
 const DEFAULT_SETTINGS = {
@@ -14,7 +15,12 @@ const DEFAULT_SETTINGS = {
 };
 
 const elements = {
+  tabExportBtn: document.getElementById('tabExportBtn'),
+  tabUnsaveBtn: document.getElementById('tabUnsaveBtn'),
+  exportPanel: document.getElementById('exportPanel'),
+  unsavePanel: document.getElementById('unsavePanel'),
   exportBtn: document.getElementById('exportBtn'),
+  exportStopBtn: document.getElementById('exportStopBtn'),
   downloadJsonBtn: document.getElementById('downloadJsonBtn'),
   useExportedBtn: document.getElementById('useExportedBtn'),
   exportedCount: document.getElementById('exportedCount'),
@@ -42,6 +48,17 @@ const elements = {
 
 let isRunningState = false;
 let hasExportedPosts = false;
+
+function switchTab(tabName) {
+  const isExport = tabName !== 'unsave';
+  elements.tabExportBtn.classList.toggle('active', isExport);
+  elements.tabUnsaveBtn.classList.toggle('active', !isExport);
+  elements.tabExportBtn.setAttribute('aria-selected', String(isExport));
+  elements.tabUnsaveBtn.setAttribute('aria-selected', String(!isExport));
+  elements.exportPanel.hidden = !isExport;
+  elements.unsavePanel.hidden = isExport;
+  chrome.storage.local.set({ [STORAGE_KEYS.ACTIVE_TAB]: isExport ? 'export' : 'unsave' });
+}
 
 function extractPostUrns(node, found = new Set()) {
   if (!node) return found;
@@ -95,6 +112,7 @@ function setStatusBadge(status) {
 
 function syncButtonStates() {
   elements.exportBtn.disabled = isRunningState;
+  elements.exportStopBtn.disabled = !isRunningState;
   elements.startBtn.disabled = isRunningState;
   elements.stopBtn.disabled = !isRunningState;
   elements.jsonFiles.disabled = isRunningState;
@@ -155,7 +173,7 @@ async function refreshCounts() {
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
+  const data = await chrome.storage.local.get([STORAGE_KEYS.SETTINGS, STORAGE_KEYS.ACTIVE_TAB]);
   const stored = data[STORAGE_KEYS.SETTINGS] || {};
   const settings = { ...DEFAULT_SETTINGS, ...stored };
 
@@ -172,6 +190,10 @@ async function loadSettings() {
   elements.minDelay.value = String(settings.minDelay);
   elements.maxDelay.value = String(settings.maxDelay);
   elements.dryRun.checked = Boolean(settings.dryRun);
+
+  if (data[STORAGE_KEYS.ACTIVE_TAB]) {
+    switchTab(data[STORAGE_KEYS.ACTIVE_TAB]);
+  }
 }
 
 function readSettingsFromUI() {
@@ -242,6 +264,9 @@ async function syncWithContentScript() {
     if (!tab?.id) return;
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_STATUS' });
     if (response) {
+      if (response.status === 'running' && response.mode) {
+        switchTab(response.mode === 'export' ? 'export' : 'unsave');
+      }
       updateProgressUI(response.stats, response.status, response.message);
     }
   } catch {
@@ -260,7 +285,7 @@ async function handleExport() {
   try {
     setRunningState(true);
     setStatusBadge('running');
-    elements.statusMessage.textContent = 'Starting saved-posts scrape on active tab...';
+    elements.statusMessage.textContent = 'Scraping saved posts on active tab...';
 
     await chrome.tabs.sendMessage(tab.id, {
       type: 'START_EXPORT',
@@ -270,7 +295,7 @@ async function handleExport() {
     setRunningState(false);
     setStatusBadge('error');
     elements.statusMessage.textContent =
-      'Cannot connect to page. Open https://www.linkedin.com/my-items/saved-posts/ and refresh the tab.';
+      'Open https://www.linkedin.com/my-items/saved-posts/ and refresh the tab.';
   }
 }
 
@@ -309,6 +334,7 @@ async function handleUseExportedAsTargets() {
 
   await chrome.storage.local.set({ [STORAGE_KEYS.TARGET_URNS]: urns });
   await refreshCounts();
+  switchTab('unsave');
   setStatusBadge('idle');
   elements.statusMessage.textContent = `Loaded ${urns.length} exported URN(s) as unsave targets.`;
 }
@@ -323,7 +349,7 @@ async function handleStart() {
   const targetUrns = Array.isArray(data[STORAGE_KEYS.TARGET_URNS]) ? data[STORAGE_KEYS.TARGET_URNS] : [];
   if (targetUrns.length === 0) {
     setStatusBadge('error');
-    elements.statusMessage.textContent = 'Load a JSON file or scrape posts and click "Load as Targets" first.';
+    elements.statusMessage.textContent = 'Load a JSON file or scrape posts and click "Send to Unsave" first.';
     return;
   }
 
@@ -362,7 +388,7 @@ async function handleStart() {
     setRunningState(false);
     setStatusBadge('error');
     elements.statusMessage.textContent =
-      'Cannot connect to page. Open https://www.linkedin.com/my-items/saved-posts/ and refresh the tab.';
+      'Open https://www.linkedin.com/my-items/saved-posts/ and refresh the tab.';
   }
 }
 
@@ -425,7 +451,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   await Promise.all([loadSettings(), refreshCounts()]);
   await syncWithContentScript();
 
+  elements.tabExportBtn.addEventListener('click', () => switchTab('export'));
+  elements.tabUnsaveBtn.addEventListener('click', () => switchTab('unsave'));
   elements.exportBtn.addEventListener('click', handleExport);
+  elements.exportStopBtn.addEventListener('click', handleStop);
   elements.downloadJsonBtn.addEventListener('click', handleDownloadJson);
   elements.useExportedBtn.addEventListener('click', handleUseExportedAsTargets);
   elements.jsonFiles.addEventListener('change', handleFileSelection);
