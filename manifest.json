@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Saved Posts Unsave Automator",
+  "version": "1.0.0",
+  "description": "Load LinkedIn Saved Post Hero JSON exports and automatically unsave matching posts on LinkedIn.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LinkedIn Unsave Automator"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.linkedin.com/my-items/saved-posts/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
