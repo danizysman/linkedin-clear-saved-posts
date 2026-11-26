@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   TARGET_URNS: 'targetUrns',
   UNSAVED_URNS: 'unsavedUrns',
+  EXPORTED_POSTS: 'exportedPosts',
   SETTINGS: 'settings'
 };
 
@@ -12,6 +13,10 @@ const DEFAULT_SETTINGS = {
 };
 
 const elements = {
+  exportBtn: document.getElementById('exportBtn'),
+  downloadJsonBtn: document.getElementById('downloadJsonBtn'),
+  useExportedBtn: document.getElementById('useExportedBtn'),
+  exportedCount: document.getElementById('exportedCount'),
   jsonFiles: document.getElementById('jsonFiles'),
   targetCount: document.getElementById('targetCount'),
   historyCount: document.getElementById('historyCount'),
@@ -23,6 +28,9 @@ const elements = {
   startBtn: document.getElementById('startBtn'),
   stopBtn: document.getElementById('stopBtn'),
   clearHistoryBtn: document.getElementById('clearHistoryBtn'),
+  clearWarning: document.getElementById('clearWarning'),
+  confirmClearBtn: document.getElementById('confirmClearBtn'),
+  cancelClearBtn: document.getElementById('cancelClearBtn'),
   scannedCount: document.getElementById('scannedCount'),
   matchedCount: document.getElementById('matchedCount'),
   unsavedCount: document.getElementById('unsavedCount'),
@@ -30,6 +38,9 @@ const elements = {
   statusBadge: document.getElementById('statusBadge'),
   statusMessage: document.getElementById('statusMessage')
 };
+
+let isRunningState = false;
+let hasExportedPosts = false;
 
 function extractPostUrns(node, found = new Set()) {
   if (!node) return found;
@@ -81,11 +92,19 @@ function setStatusBadge(status) {
   }
 }
 
+function syncButtonStates() {
+  elements.exportBtn.disabled = isRunningState;
+  elements.startBtn.disabled = isRunningState;
+  elements.stopBtn.disabled = !isRunningState;
+  elements.jsonFiles.disabled = isRunningState;
+  elements.clearHistoryBtn.disabled = isRunningState;
+  elements.downloadJsonBtn.disabled = isRunningState || !hasExportedPosts;
+  elements.useExportedBtn.disabled = isRunningState || !hasExportedPosts;
+}
+
 function setRunningState(isRunning) {
-  elements.startBtn.disabled = isRunning;
-  elements.stopBtn.disabled = !isRunning;
-  elements.jsonFiles.disabled = isRunning;
-  elements.clearHistoryBtn.disabled = isRunning;
+  isRunningState = Boolean(isRunning);
+  syncButtonStates();
 }
 
 function updateProgressUI(stats = {}, status, message) {
@@ -94,10 +113,18 @@ function updateProgressUI(stats = {}, status, message) {
   elements.unsavedCount.textContent = String(stats.unsaved ?? 0);
   elements.skippedCount.textContent = String(stats.skipped ?? 0);
 
+  if (typeof stats.exported === 'number' && stats.exported > 0) {
+    elements.exportedCount.textContent = String(stats.exported);
+    hasExportedPosts = true;
+  }
+
   if (status) {
     setStatusBadge(status);
     setRunningState(status === 'running');
+  } else {
+    syncButtonStates();
   }
+
   if (message) {
     elements.statusMessage.textContent = message;
   }
@@ -106,11 +133,13 @@ function updateProgressUI(stats = {}, status, message) {
 async function refreshCounts() {
   const data = await chrome.storage.local.get([
     STORAGE_KEYS.TARGET_URNS,
-    STORAGE_KEYS.UNSAVED_URNS
+    STORAGE_KEYS.UNSAVED_URNS,
+    STORAGE_KEYS.EXPORTED_POSTS
   ]);
 
   const targetUrns = Array.isArray(data[STORAGE_KEYS.TARGET_URNS]) ? data[STORAGE_KEYS.TARGET_URNS] : [];
   const unsavedUrns = Array.isArray(data[STORAGE_KEYS.UNSAVED_URNS]) ? data[STORAGE_KEYS.UNSAVED_URNS] : [];
+  const exportedPosts = Array.isArray(data[STORAGE_KEYS.EXPORTED_POSTS]) ? data[STORAGE_KEYS.EXPORTED_POSTS] : [];
 
   const unsavedSet = new Set(unsavedUrns);
   const remaining = targetUrns.filter((urn) => !unsavedSet.has(urn)).length;
@@ -118,6 +147,10 @@ async function refreshCounts() {
   elements.targetCount.textContent = String(targetUrns.length);
   elements.historyCount.textContent = String(unsavedUrns.length);
   elements.remainingCount.textContent = String(remaining);
+  elements.exportedCount.textContent = String(exportedPosts.length);
+
+  hasExportedPosts = exportedPosts.length > 0;
+  syncButtonStates();
 }
 
 async function loadSettings() {
@@ -204,6 +237,70 @@ async function syncWithContentScript() {
   }
 }
 
+async function handleExport() {
+  const tab = await getActiveTab();
+  if (!tab?.id) {
+    setStatusBadge('error');
+    elements.statusMessage.textContent = 'No active browser tab found.';
+    return;
+  }
+
+  try {
+    setRunningState(true);
+    setStatusBadge('running');
+    elements.statusMessage.textContent = 'Starting saved-posts scrape on active tab...';
+
+    await chrome.tabs.sendMessage(tab.id, {
+      type: 'START_EXPORT',
+      config: { maxPosts: 0 }
+    });
+  } catch {
+    setRunningState(false);
+    setStatusBadge('error');
+    elements.statusMessage.textContent =
+      'Cannot connect to page. Open https://www.linkedin.com/my-items/saved-posts/ and refresh the tab.';
+  }
+}
+
+async function handleDownloadJson() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.EXPORTED_POSTS);
+  const exportedPosts = Array.isArray(data[STORAGE_KEYS.EXPORTED_POSTS]) ? data[STORAGE_KEYS.EXPORTED_POSTS] : [];
+  if (exportedPosts.length === 0) {
+    elements.statusMessage.textContent = 'No exported posts available to download.';
+    return;
+  }
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify(exportedPosts, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `linkedin-saved-posts-${dateStamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  elements.statusMessage.textContent = `Downloaded ${exportedPosts.length} post(s) as JSON.`;
+}
+
+async function handleUseExportedAsTargets() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.EXPORTED_POSTS);
+  const exportedPosts = Array.isArray(data[STORAGE_KEYS.EXPORTED_POSTS]) ? data[STORAGE_KEYS.EXPORTED_POSTS] : [];
+  const urns = Array.from(extractPostUrns(exportedPosts));
+
+  if (urns.length === 0) {
+    elements.statusMessage.textContent = 'No post URNs found in exported posts.';
+    return;
+  }
+
+  await chrome.storage.local.set({ [STORAGE_KEYS.TARGET_URNS]: urns });
+  await refreshCounts();
+  setStatusBadge('idle');
+  elements.statusMessage.textContent = `Loaded ${urns.length} exported URN(s) as unsave targets.`;
+}
+
 async function handleStart() {
   const settings = await saveSettings();
   const data = await chrome.storage.local.get([
@@ -214,7 +311,7 @@ async function handleStart() {
   const targetUrns = Array.isArray(data[STORAGE_KEYS.TARGET_URNS]) ? data[STORAGE_KEYS.TARGET_URNS] : [];
   if (targetUrns.length === 0) {
     setStatusBadge('error');
-    elements.statusMessage.textContent = 'Load at least one JSON file with post_urn entries first.';
+    elements.statusMessage.textContent = 'Load a JSON file or scrape posts and click "Load as Targets" first.';
     return;
   }
 
@@ -261,7 +358,7 @@ async function handleStop() {
   try {
     const tab = await getActiveTab();
     if (tab?.id) {
-      await chrome.tabs.sendMessage(tab.id, { type: 'STOP_UNSAVE' });
+      await chrome.tabs.sendMessage(tab.id, { type: 'STOP_AUTOMATION' });
       elements.statusMessage.textContent = 'Stopping after current step...';
     }
   } catch {
@@ -270,10 +367,28 @@ async function handleStop() {
   }
 }
 
-async function handleClearHistory() {
-  await chrome.storage.local.set({ [STORAGE_KEYS.UNSAVED_URNS]: [] });
+function handleClearHistory() {
+  elements.clearWarning.hidden = false;
+}
+
+function handleCancelClear() {
+  elements.clearWarning.hidden = true;
+}
+
+async function handleConfirmClear() {
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.UNSAVED_URNS]: [],
+    [STORAGE_KEYS.TARGET_URNS]: [],
+    [STORAGE_KEYS.EXPORTED_POSTS]: []
+  });
+  elements.jsonFiles.value = '';
+  elements.clearWarning.hidden = true;
   await refreshCounts();
-  elements.statusMessage.textContent = 'Cleared unsaved post history.';
+  updateProgressUI(
+    { scanned: 0, matched: 0, unsaved: 0, skipped: 0, exported: 0 },
+    'idle',
+    'Cleared all exported posts, target URNs, and unsaved history.'
+  );
 }
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -284,7 +399,11 @@ chrome.runtime.onMessage.addListener((message) => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (changes[STORAGE_KEYS.TARGET_URNS] || changes[STORAGE_KEYS.UNSAVED_URNS]) {
+  if (
+    changes[STORAGE_KEYS.TARGET_URNS] ||
+    changes[STORAGE_KEYS.UNSAVED_URNS] ||
+    changes[STORAGE_KEYS.EXPORTED_POSTS]
+  ) {
     refreshCounts();
   }
 });
@@ -293,6 +412,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   await Promise.all([loadSettings(), refreshCounts()]);
   await syncWithContentScript();
 
+  elements.exportBtn.addEventListener('click', handleExport);
+  elements.downloadJsonBtn.addEventListener('click', handleDownloadJson);
+  elements.useExportedBtn.addEventListener('click', handleUseExportedAsTargets);
   elements.jsonFiles.addEventListener('change', handleFileSelection);
   elements.maxPosts.addEventListener('change', saveSettings);
   elements.minDelay.addEventListener('change', saveSettings);
@@ -301,4 +423,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   elements.startBtn.addEventListener('click', handleStart);
   elements.stopBtn.addEventListener('click', handleStop);
   elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
+  elements.confirmClearBtn.addEventListener('click', handleConfirmClear);
+  elements.cancelClearBtn.addEventListener('click', handleCancelClear);
 });

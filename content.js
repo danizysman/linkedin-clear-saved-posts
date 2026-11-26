@@ -1,7 +1,8 @@
 (() => {
   const STORAGE_KEYS = {
     TARGET_URNS: 'targetUrns',
-    UNSAVED_URNS: 'unsavedUrns'
+    UNSAVED_URNS: 'unsavedUrns',
+    EXPORTED_POSTS: 'exportedPosts'
   };
 
   const URN_REGEX = /urn:li:(?:activity|ugcPost):\d+/;
@@ -12,13 +13,15 @@
 
   const state = {
     status: 'idle',
+    mode: null,
     shouldStop: false,
     message: 'Idle',
     stats: {
       scanned: 0,
       matched: 0,
       unsaved: 0,
-      skipped: 0
+      skipped: 0,
+      exported: 0
     }
   };
 
@@ -34,12 +37,12 @@
       chrome.runtime.sendMessage(
         {
           type: 'PROGRESS',
+          mode: state.mode,
           status: state.status,
           message: state.message,
           stats: { ...state.stats }
         },
         () => {
-          // Read lastError to avoid unchecked runtime.lastError warnings when popup is closed.
           void chrome.runtime.lastError;
         }
       );
@@ -124,6 +127,166 @@
     }
 
     return Array.from(candidates);
+  }
+
+  function extractDateFromActivityUrn(urn) {
+    const match = urn.match(/urn:li:activity:(\d+)/);
+    if (!match) return null;
+    try {
+      const ms = Number(BigInt(match[1]) >> 22n);
+      const date = new Date(ms);
+      if (Number.isNaN(date.getTime()) || date.getFullYear() < 2015 || date.getFullYear() > 2100) {
+        return null;
+      }
+      return date.toISOString();
+    } catch {
+      return null;
+    }
+  }
+
+  function extractCardData(card, urn) {
+    let postUrl = `https://www.linkedin.com/feed/update/${urn}/`;
+    const postLinks = card.querySelectorAll('a[href]');
+    for (const link of postLinks) {
+      const href = link.getAttribute('href') || '';
+      if (decodeSafely(href).includes(urn) || href.includes('/feed/update/') || href.includes('/posts/')) {
+        postUrl = link.href;
+        break;
+      }
+    }
+
+    const authorLinks = Array.from(card.querySelectorAll('a[href*="/in/"], a[href*="/company/"]'));
+    const authorLink = authorLinks[0] || null;
+    const authorProfileUrl = authorLink ? authorLink.href : null;
+    const isCompanyPost = Boolean(authorProfileUrl && authorProfileUrl.includes('/company/'));
+
+    const avatarImg =
+      card.querySelector('img.presence-entity__image, .entity-result__content-image img') ||
+      authorLink?.querySelector('img') ||
+      null;
+    const authorProfileImageUrl = avatarImg?.src || null;
+
+    const ignoredNamePattern = /^(?:status is\b|view\b|ver\b)/i;
+    let authorName = null;
+    for (const link of authorLinks) {
+      const candidates = [
+        ...link.querySelectorAll('span[aria-hidden="true"]'),
+        link
+      ];
+      for (const node of candidates) {
+        const raw = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!raw || ignoredNamePattern.test(raw) || /^\d+(?:st|nd|rd|th|\.?º)$/i.test(raw)) {
+          continue;
+        }
+        authorName = raw;
+        break;
+      }
+      if (authorName) break;
+    }
+    if (!authorName && avatarImg?.alt) {
+      const altText = avatarImg.alt.trim();
+      if (altText && !ignoredNamePattern.test(altText)) {
+        authorName = altText;
+      }
+    }
+
+    const timeTokenPattern = /^\d+\s*(?:s|m|h|d|w|mo|yr|sem|mes)\s*•?$/i;
+    const headlineEl = card.querySelector(
+      '.entity-result__primary-subtitle, .entity-result__content-actor .t-12.t-black--light'
+    );
+    const rawHeadline = headlineEl?.textContent?.replace(/\s+/g, ' ').trim() || null;
+    const authorHeadline = rawHeadline && !timeTokenPattern.test(rawHeadline) ? rawHeadline : null;
+
+    let connectionDegree = null;
+    const badgeEl = card.querySelector('.entity-result__badge-text, .distance-and-badge');
+    if (badgeEl?.textContent) {
+      const match = badgeEl.textContent.match(/\b(1st|2nd|3rd\+?|[123]\.º)\b/i);
+      if (match) connectionDegree = match[1];
+    }
+
+    let postText = '';
+    const textSelectors = [
+      '.entity-result__content-summary',
+      'p.entity-result__summary',
+      '[class*="entity-result__summary"]',
+      '.feed-shared-update-v2__description',
+      '.update-components-text',
+      '.entity-result__content-container p',
+      '.entity-result__content-container span[dir="ltr"]'
+    ];
+    for (const selector of textSelectors) {
+      const candidates = card.querySelectorAll(selector);
+      for (const el of candidates) {
+        if (el.closest('.entity-result__content-actor')) continue;
+        const cleaned = (el.textContent || '')
+          .replace(/\s+/g, ' ')
+          .replace(/\s*…?\s*(?:see more|ver más)\s*$/i, '')
+          .trim();
+        if (
+          !cleaned ||
+          timeTokenPattern.test(cleaned) ||
+          cleaned === authorName ||
+          /^(?:1st|2nd|3rd\+?|[123]\.º)$/i.test(cleaned)
+        ) {
+          continue;
+        }
+        postText = cleaned;
+        break;
+      }
+      if (postText) break;
+    }
+
+    const mediaImgs = Array.from(card.querySelectorAll('img')).filter((img) => {
+      if (img === avatarImg) return false;
+      if (img.classList.contains('presence-entity__image')) return false;
+      if (img.closest('.entity-result__content-image')) return false;
+      return Boolean(img.src);
+    });
+    const postImageEl =
+      card.querySelector(
+        '.entity-result__embedded-object-image img, .feed-shared-image__image, .update-components-image__image'
+      ) ||
+      mediaImgs[0] ||
+      null;
+
+    const postImageUrl = postImageEl?.src || null;
+    const postImageAlt = postImageEl?.alt?.trim() || null;
+    const hasImage = Boolean(postImageUrl);
+    const hasVideo = Boolean(
+      card.querySelector('video, .video-s-loader, [data-test-id*="video" i], [aria-label*="video" i]')
+    );
+
+    let postedTime = null;
+    const timeCandidates = card.querySelectorAll(
+      'time, .entity-result__content-subtext, .entity-result__content-actor .t-12.t-black--light, .entity-result__primary-subtitle'
+    );
+    for (const el of timeCandidates) {
+      const text = el.textContent?.replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const match = text.match(/\b(\d+\s*(?:s|m|h|d|w|mo|yr|sem|mes))\b/i);
+      if (match) {
+        postedTime = match[1];
+        break;
+      }
+    }
+
+    return {
+      author_headline: authorHeadline,
+      author_name: authorName,
+      author_profile_image_url: authorProfileImageUrl,
+      author_profile_url: authorProfileUrl,
+      connection_degree: connectionDegree,
+      has_image: hasImage,
+      has_video: hasVideo,
+      is_company_post: isCompanyPost,
+      post_image_alt: postImageAlt,
+      post_image_url: postImageUrl,
+      post_text: postText,
+      post_url: postUrl,
+      post_urn: urn,
+      posted_date: extractDateFromActivityUrn(urn),
+      posted_time: postedTime
+    };
   }
 
   function findOverflowButton(card) {
@@ -232,6 +395,89 @@
     card.style.borderRadius = '6px';
   }
 
+  async function runExportAutomation(config) {
+    if (state.status === 'running') {
+      log('Automation is already running.');
+      return;
+    }
+
+    const maxPosts = Math.max(0, Number(config?.maxPosts) || 0);
+    state.mode = 'export';
+    state.shouldStop = false;
+    state.stats = { scanned: 0, matched: 0, unsaved: 0, skipped: 0, exported: 0 };
+
+    emitProgress('running', 'Exporting saved posts from page...');
+    log(`Started Export, maxPosts=${maxPosts || 'unlimited'}`);
+
+    const processedCards = new WeakSet();
+    const seenUrns = new Set();
+    const exportedPosts = [];
+    let emptyScrollAttempts = 0;
+
+    while (!state.shouldStop) {
+      const cards = findSavedPostCards();
+      const newCards = cards.filter((card) => !processedCards.has(card));
+
+      if (newCards.length === 0) {
+        emptyScrollAttempts += 1;
+        if (emptyScrollAttempts > MAX_EMPTY_SCROLL_ATTEMPTS) {
+          await chrome.storage.local.set({ [STORAGE_KEYS.EXPORTED_POSTS]: exportedPosts });
+          emitProgress('completed', `Export finished: ${exportedPosts.length} post(s) collected.`);
+          log(`Export finished: ${exportedPosts.length} post(s) collected.`);
+          return;
+        }
+
+        emitProgress(
+          'running',
+          `Scrolling for more posts (${exportedPosts.length} exported, attempt ${emptyScrollAttempts}/${MAX_EMPTY_SCROLL_ATTEMPTS})...`
+        );
+        window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: 'smooth' });
+        await sleepInterruptible(SCROLL_WAIT_MS);
+        continue;
+      }
+
+      emptyScrollAttempts = 0;
+
+      for (const card of newCards) {
+        if (state.shouldStop) break;
+
+        processedCards.add(card);
+        state.stats.scanned += 1;
+
+        const urn = extractCardUrn(card);
+        if (!urn || seenUrns.has(urn)) {
+          state.stats.skipped += 1;
+          emitProgress('running');
+          continue;
+        }
+
+        seenUrns.add(urn);
+        exportedPosts.push(extractCardData(card, urn));
+        state.stats.exported = exportedPosts.length;
+        emitProgress('running', `Exported ${exportedPosts.length} post(s)...`);
+
+        if (maxPosts > 0 && exportedPosts.length >= maxPosts) {
+          await chrome.storage.local.set({ [STORAGE_KEYS.EXPORTED_POSTS]: exportedPosts });
+          emitProgress('completed', `Export reached max posts (${maxPosts}).`);
+          log(`Export reached maxPosts (${maxPosts}).`);
+          return;
+        }
+      }
+
+      await chrome.storage.local.set({ [STORAGE_KEYS.EXPORTED_POSTS]: exportedPosts });
+      if (state.shouldStop) break;
+
+      window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: 'smooth' });
+      await sleepInterruptible(SCROLL_WAIT_MS);
+    }
+
+    if (state.shouldStop) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.EXPORTED_POSTS]: exportedPosts });
+      emitProgress('stopped', `Export stopped (${exportedPosts.length} post(s) saved).`);
+      log(`Export stopped by user (${exportedPosts.length} post(s) saved).`);
+    }
+  }
+
   async function runUnsaveAutomation(config) {
     if (state.status === 'running') {
       log('Automation is already running.');
@@ -243,8 +489,9 @@
     const maxDelayMs = Number(config?.maxDelayMs) || 4500;
     const dryRun = Boolean(config?.dryRun);
 
+    state.mode = 'unsave';
     state.shouldStop = false;
-    state.stats = { scanned: 0, matched: 0, unsaved: 0, skipped: 0 };
+    state.stats = { scanned: 0, matched: 0, unsaved: 0, skipped: 0, exported: 0 };
 
     const stored = await chrome.storage.local.get([
       STORAGE_KEYS.TARGET_URNS,
@@ -384,10 +631,17 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'GET_STATUS') {
       sendResponse({
+        mode: state.mode,
         status: state.status,
         message: state.message,
         stats: { ...state.stats }
       });
+      return false;
+    }
+
+    if (message?.type === 'START_EXPORT') {
+      runExportAutomation(message.config);
+      sendResponse({ started: true });
       return false;
     }
 
@@ -397,7 +651,7 @@
       return false;
     }
 
-    if (message?.type === 'STOP_UNSAVE') {
+    if (message?.type === 'STOP_UNSAVE' || message?.type === 'STOP_AUTOMATION') {
       state.shouldStop = true;
       sendResponse({ stopping: true });
       return false;

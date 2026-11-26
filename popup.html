@@ -3,22 +3,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LinkedIn Unsave Automator</title>
+  <title>LinkedIn Saved Posts Manager</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="container">
     <header class="header">
       <div class="title-group">
-        <h1>Saved Posts Unsave</h1>
-        <p class="subtitle">LinkedIn Saved Post Hero</p>
+        <h1>Saved Posts Manager</h1>
+        <p class="subtitle">Export JSON &amp; Unsave on LinkedIn</p>
       </div>
       <span id="statusBadge" class="badge badge-idle">Idle</span>
     </header>
 
     <section class="card">
+      <div class="card-header-row">
+        <span class="section-header">1. Export Saved Posts</span>
+        <span class="pill-count"><strong id="exportedCount">0</strong> collected</span>
+      </div>
+      <div class="export-actions">
+        <button id="exportBtn" class="btn btn-primary" type="button">Scrape Posts</button>
+        <button id="downloadJsonBtn" class="btn btn-secondary" type="button" disabled>Download JSON</button>
+        <button id="useExportedBtn" class="btn btn-secondary" type="button" disabled>Load as Targets</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-header">2. Unsave Targets</div>
       <label for="jsonFiles" class="file-label">
-        <span class="file-label-title">Load JSON Export(s)</span>
+        <span class="file-label-title">Or Load JSON File(s)</span>
         <span class="file-label-hint">Select one or more .json files</span>
         <input type="file" id="jsonFiles" accept=".json" multiple>
       </label>
@@ -66,6 +79,14 @@
       <button id="clearHistoryBtn" class="btn btn-secondary" type="button">Clear History</button>
     </section>
 
+    <section id="clearWarning" class="warning-banner" hidden>
+      <p>This will clear all exported JSON posts, target URNs, and unsaved history. Continue?</p>
+      <div class="warning-actions">
+        <button id="confirmClearBtn" class="btn btn-danger" type="button">Yes, Clear All</button>
+        <button id="cancelClearBtn" class="btn btn-secondary" type="button">Cancel</button>
+      </div>
+    </section>
+
     <section class="card">
       <div class="section-header">Live Progress</div>
       <div class="stats-grid stats-grid-4">
@@ -86,7 +107,7 @@
           <span class="stat-label">Skipped</span>
         </div>
       </div>
-      <p id="statusMessage" class="status-message" role="status" aria-live="polite">Ready. Open LinkedIn Saved Posts and load your JSON export.</p>
+      <p id="statusMessage" class="status-message" role="status" aria-live="polite">Ready. Open LinkedIn Saved Posts to scrape or unsave.</p>
     </section>
   </div>
 

@@ -1,12 +1,12 @@
-# LinkedIn Saved Posts Unsave Automator
+# LinkedIn Saved Posts Manager
 
-A zero-dependency Manifest V3 Chrome extension that loads JSON files exported by **LinkedIn Saved Post Hero** and automatically unsaves matching posts on `https://www.linkedin.com/my-items/saved-posts/`.
+A zero-dependency Manifest V3 Chrome extension to **export** your LinkedIn saved posts to JSON and **automatically unsave** them on `https://www.linkedin.com/my-items/saved-posts/`.
 
 ## Files
 
 - `manifest.json` — Manifest V3 configuration (`storage`, `activeTab`, `https://www.linkedin.com/*`, and `content.js` on `/my-items/saved-posts/*`).
-- `popup.html` / `popup.css` / `popup.js` — Extension popup UI for loading JSON exports, configuring run limits/delays, and tracking live progress.
-- `content.js` — DOM automation script that matches saved-post `post_urn`s, highlights matches in Dry Run mode, or opens each card's overflow menu to click **Unsave** / **Dejar de guardar** in Live mode.
+- `popup.html` / `popup.css` / `popup.js` — Extension popup UI for scraping saved posts, downloading JSON, loading target JSON files, configuring run limits/delays, and tracking live progress.
+- `content.js` — DOM automation script for scraping saved posts (`author_name`, `author_headline`, `author_profile_url`, `author_profile_image_url`, `connection_degree`, `is_company_post`, `post_urn`, `post_url`, `post_text`, `post_image_url`, `post_image_alt`, `has_image`, `has_video`, `posted_date` decoded from the activity URN, `posted_time`) and unsaving matching posts (Dry Run highlight or Live click of **Unsave** / **Dejar de guardar**).
 
 ## Installation (Load Unpacked)
 
@@ -18,9 +18,12 @@ A zero-dependency Manifest V3 Chrome extension that loads JSON files exported by
 
 1. Open [https://www.linkedin.com/my-items/saved-posts/](https://www.linkedin.com/my-items/saved-posts/) in your active Chrome tab.
 2. Click the extension icon in the toolbar to open the popup.
-3. Select one or more `.json` files exported by LinkedIn Saved Post Hero.
-4. (Recommended) Check **Dry Run (highlight matches only)** and click **Start Unsaving** to verify matched cards are outlined in green.
-5. Uncheck **Dry Run**, adjust **Max posts per run** (default `25`) and **Delay range** (default `2.5`–`4.5`s), and click **Start Unsaving**.
+3. **Export**: Click **Scrape Posts** to collect your saved posts across lazy-loaded batches. Once finished (or stopped), click **Download JSON** to save a backup file, and optionally **Load as Targets** to queue them for unsaving.
+4. **Or Load JSON**: Select one or more `.json` files containing `post_urn` entries.
+5. **Unsave**:
+   - (Recommended) Check **Dry Run (highlight matches only)** and click **Start Unsaving** to verify matched cards are outlined in green.
+   - Uncheck **Dry Run**, adjust **Max posts per run** (default `25`) and **Delay range** (default `2.5`–`4.5`s), and click **Start Unsaving**.
+6. **Clear History**: Prompts for confirmation and clears all exported posts, target URNs, and unsaved history from `chrome.storage.local`.
 
 ## Inspecting Logs in DevTools
 
